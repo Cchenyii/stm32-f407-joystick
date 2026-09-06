@@ -1,0 +1,44 @@
+# Prerequisites
+*.o
+*.d
+*.su
+*.cyclo
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.lnk
+*.srec
+
+# CubeIDE / Eclipse build
+Debug/
+Release/
+.settings/org.eclipse.cdt.core.prefs
+.settings/language.settings.xml
+
+# CubeMX / IDE junk
+*.launch
+.mxproject.bak
+*.bak
+
+# IAR leftover
+EWARM/
+
+# Unused Cube package bulk (not linked by this project)
+Drivers/CMSIS/DSP/
+Drivers/CMSIS/NN/
+Drivers/CMSIS/DAP/
+Drivers/CMSIS/RTOS/
+Drivers/CMSIS/RTOS2/
+Drivers/CMSIS/Documentation/
+Drivers/CMSIS/Core_A/
+Drivers/CMSIS/Pack/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/

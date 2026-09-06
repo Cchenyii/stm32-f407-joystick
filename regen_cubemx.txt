@@ -1,0 +1,4 @@
+config load C:/Users/CJY13/Documents/CJY/CJY.ioc
+project toolchain set STM32CubeIDE
+project generate
+exit
