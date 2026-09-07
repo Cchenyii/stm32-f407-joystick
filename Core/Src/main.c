@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ssd1306.h"
+#include "sensor_protocol.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -58,17 +59,25 @@ const osThreadAttr_t TaskA_attributes = {
 osThreadId_t TaskBHandle;
 const osThreadAttr_t TaskB_attributes = {
   .name = "TaskB",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
 ADC_HandleTypeDef hadc1;
+UART_HandleTypeDef huart2;
 osMutexId_t uartMutexHandle;
 const osMutexAttr_t uartMutex_attributes = {
   .name = "uartMutex"
 };
 /* adc samples filled by polling (no DMA) */
 volatile uint16_t adc_dma_buf[2];
+typedef struct {
+  uint16_t x;
+  uint16_t y;
+  uint8_t direction;
+  uint8_t sw;
+} JoySample;
+volatile JoySample g_joy = {2048, 2048, SP_JOY_CENTER, 0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -81,6 +90,7 @@ void StartTask02(void *argument);
 
 /* USER CODE BEGIN PFP */
 static void MX_ADC1_Init(void);
+static void MX_USART2_UART_Init(void);
 static uint16_t ADC_ReadChannel(uint32_t channel);
 /* USER CODE END PFP */
 
@@ -130,6 +140,7 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   MX_ADC1_Init();
+  MX_USART2_UART_Init();
   {
     const char boot[] = "boot\r\n";
     HAL_UART_Transmit(&huart1, (uint8_t *)boot, sizeof(boot) - 1, 100);
@@ -147,6 +158,10 @@ int main(void)
     SSD1306_SetCursor(0, 0);
     SSD1306_WriteString("F407 JOYSTICK");
     SSD1306_Update();
+  }
+  {
+    const char link[] = "USART2->ESP32B V1\r\n";
+    HAL_UART_Transmit(&huart1, (uint8_t *)link, sizeof(link) - 1, 100);
   }
   /* USER CODE END 2 */
 
@@ -387,6 +402,22 @@ static uint16_t ADC_ReadChannel(uint32_t channel)
   return (uint16_t)HAL_ADC_GetValue(&hadc1);
 }
 
+static void MX_USART2_UART_Init(void)
+{
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
 #define JOY_CENTER   2048
 #define JOY_DEADZONE 400   /* 中心附近晃动忽略 */
 
@@ -396,7 +427,7 @@ static uint16_t JoyFilter(uint16_t prev, uint16_t sample)
   return (uint16_t)((prev * 3U + sample) / 4U);
 }
 
-static const char *JoyDir(uint16_t x, uint16_t y)
+static uint8_t JoyDirCode(uint16_t x, uint16_t y)
 {
   const int dx = (int)x - JOY_CENTER;
   const int dy = (int)y - JOY_CENTER;
@@ -405,15 +436,26 @@ static const char *JoyDir(uint16_t x, uint16_t y)
 
   if (ax < JOY_DEADZONE && ay < JOY_DEADZONE)
   {
-    return "CENTER";
+    return SP_JOY_CENTER;
   }
 
-  /* 主方向取偏移更大的轴；常见模块：X 右大、Y 下大（若反了再对调） */
   if (ax >= ay)
   {
-    return (dx > 0) ? "RIGHT" : "LEFT";
+    return (dx > 0) ? SP_JOY_RIGHT : SP_JOY_LEFT;
   }
-  return (dy > 0) ? "DOWN" : "UP";
+  return (dy > 0) ? SP_JOY_DOWN : SP_JOY_UP;
+}
+
+static const char *JoyDirName(uint8_t code)
+{
+  switch (code)
+  {
+    case SP_JOY_LEFT: return "LEFT";
+    case SP_JOY_RIGHT: return "RIGHT";
+    case SP_JOY_UP: return "UP";
+    case SP_JOY_DOWN: return "DOWN";
+    default: return "CENTER";
+  }
 }
 /* USER CODE END 4 */
 
@@ -439,10 +481,15 @@ void StartDefaultTask(void *argument)
     fy = JoyFilter(fy, adc_dma_buf[1]);
     const unsigned sw =
         (HAL_GPIO_ReadPin(JOY_SW_GPIO_Port, JOY_SW_Pin) == GPIO_PIN_RESET) ? 1U : 0U;
-    const char *dir = JoyDir(fx, fy);
+    const uint8_t dir = JoyDirCode(fx, fy);
+
+    g_joy.x = fx;
+    g_joy.y = fy;
+    g_joy.direction = dir;
+    g_joy.sw = (uint8_t)sw;
 
     snprintf(line, sizeof(line), "X=%u Y=%u %s SW=%u\r\n",
-             (unsigned)fx, (unsigned)fy, dir, sw);
+             (unsigned)fx, (unsigned)fy, JoyDirName(dir), sw);
     UartPrint(line);
 
     SSD1306_Clear();
@@ -455,7 +502,7 @@ void StartDefaultTask(void *argument)
     SSD1306_SetCursor(0, 3);
     SSD1306_WriteString(line);
     SSD1306_SetCursor(0, 5);
-    SSD1306_WriteString(dir);
+    SSD1306_WriteString(JoyDirName(dir));
     snprintf(line, sizeof(line), "SW=%u", sw);
     SSD1306_SetCursor(0, 6);
     SSD1306_WriteString(line);
@@ -476,10 +523,47 @@ void StartDefaultTask(void *argument)
 void StartTask02(void *argument)
 {
   /* USER CODE BEGIN StartTask02 */
+  uint32_t sequence = 1;
+  uint8_t frame[SP_MAX_FRAME_SIZE];
+  uint8_t rx[16];
+  char line[40];
+
   for (;;)
   {
-    UartPrint("TaskB alive\r\n");
-    osDelay(1000);
+    const JoySample sample = g_joy;
+    const size_t len = Sp_EncodeJoystickFrame(
+        sequence, sample.x, sample.y, sample.direction, sample.sw, frame,
+        sizeof(frame));
+    int acked = 0;
+    if (len > 0)
+    {
+      for (int attempt = 0; attempt < 3 && !acked; ++attempt)
+      {
+        HAL_UART_Transmit(&huart2, frame, (uint16_t)len, 50);
+        /* drain / wait ACK ~80ms */
+        uint32_t got = 0;
+        const uint32_t t0 = HAL_GetTick();
+        while ((HAL_GetTick() - t0) < 80u && got < sizeof(rx))
+        {
+          uint8_t b;
+          if (HAL_UART_Receive(&huart2, &b, 1, 5) == HAL_OK)
+          {
+            rx[got++] = b;
+            if (got >= 13u && Sp_IsAckOk(rx, got, sequence))
+            {
+              acked = 1;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    snprintf(line, sizeof(line), "TX seq=%lu %s\r\n",
+             (unsigned long)sequence, acked ? "ACK" : "NOACK");
+    UartPrint(line);
+    sequence++;
+    osDelay(200);
   }
   /* USER CODE END StartTask02 */
 }

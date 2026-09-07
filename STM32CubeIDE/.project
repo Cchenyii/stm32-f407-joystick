@@ -207,6 +207,11 @@
 			<locationURI>PARENT-1-PROJECT_LOC/Core/Src/ssd1306.c</locationURI>
 		</link>
 		<link>
+			<name>Application/User/Core/sensor_protocol.c</name>
+			<type>1</type>
+			<locationURI>PARENT-1-PROJECT_LOC/Core/Src/sensor_protocol.c</locationURI>
+		</link>
+		<link>
 			<name>Application/User/Core/stm32f4xx_hal_msp.c</name>
 			<type>1</type>
 			<locationURI>PARENT-1-PROJECT_LOC/Core/Src/stm32f4xx_hal_msp.c</locationURI>

@@ -1,32 +1,40 @@
 # STM32F407 摇杆采集演示
 
-STM32CubeIDE + HAL + FreeRTOS 小项目：双轴摇杆 ADC 采样、方向死区判断、UART 打印、SSD1306 OLED 显示。
+STM32CubeIDE + HAL + FreeRTOS：双轴摇杆 ADC、方向死区、本地 OLED、UART 调试，并通过 **V1 同构协议** 把摇杆状态发给 ESP32 B 板。
 
 ## 硬件
 
 | 外设 | 引脚 |
 |------|------|
-| USART1 TX/RX | PA9 / PA10（ST-Link VCP，115200） |
+| USART1 TX/RX | PA9 / PA10（ST-Link VCP 调试，115200） |
+| USART2 TX/RX | **PA2 / PA3** → ESP32 B `GPIO17 / GPIO16` |
 | 摇杆 VRx / VRy | PA0 / PA1（ADC1） |
-| 摇杆 SW | PA4（上拉输入，按下为有效） |
-| OLED I2C SCL/SDA | PB6 / PB7（I2C1，SSD1306 地址 0x3C） |
+| 摇杆 SW | PA4（上拉，按下有效） |
+| OLED I2C SCL/SDA | PB6 / PB7（SSD1306 `0x3C`） |
 
-摇杆模块丝印常为 `+5V`，接 **3.3V**，避免模拟输出超过 MCU 耐压。
+摇杆丝印 `+5V` 仍接 **3.3V**。
+
+### 与 ESP32 B 联调接线
+
+| STM32 | ESP32 B |
+|-------|---------|
+| PA2 (USART2_TX) | GPIO16 (RX2) |
+| PA3 (USART2_RX) | GPIO17 (TX2) |
+| GND | GND |
+
+协议与 `esp32-ab-sensor` 的 V1 帧同构：`AA 55 | Ver | Type=0x04 JOYSTICK_DATA | Seq | Len | Payload(6) | CRC16`，B 回 ACK。
 
 ## 软件要点
 
-- FreeRTOS（CMSIS-RTOS v2）：TaskA 采集/显示，TaskB 心跳
-- UART 互斥输出，避免双任务抢串口乱码
-- ADC 轮询双通道 + 简单低通滤波 + 死区方向（CENTER/LEFT/RIGHT/UP/DOWN）
-- 精简 SSD1306 驱动（`Core/Src/ssd1306.c`）
+- FreeRTOS：TaskA 采样/滤波/OLED；TaskB 组帧经 USART2 发送并等 ACK（最多 3 次）
+- `Core/Src/sensor_protocol.c`：CRC-16/CCITT 与 ESP32 一致
+- ADC 轮询双通道（避免 DMA 完成中断饿死）
 
 ## 打开工程
 
-1. 用 **STM32CubeIDE** 导入：`STM32CubeIDE/` 目录（不要只打开外层空文件夹）
-2. Build → Run（ST-Link）
-3. 串口：**COM口 / 115200**，应看到 `boot` / `oled ok` 以及 `X=... Y=... DIR SW=...`
+1. STM32CubeIDE 导入 `STM32CubeIDE/`
+2. Build → Run
+3. 调试串口（USART1）应看到 `boot` / `oled ok` / `TX seq=... ACK`
+4. 烧录 B 板固件 ≥ `1.2.0`，USB 串口应打印 `JOY seq=...`
 
-## 说明
-
-- `CJY.ioc` 当前以 I2C/USART/FreeRTOS 为主；ADC 与摇杆 GPIO 有部分在 USER CODE 中手动维护。重新 GENERATE 前请备份。
-- 后续可扩展：队列解耦采样/显示、与 ESP32 做 UART 协议联动。
+配套仓库：https://github.com/Cchenyii/esp32-ab-sensor
