@@ -44,9 +44,12 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+
 I2C_HandleTypeDef hi2c1;
 
 UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart2;
 
 /* Definitions for TaskA */
 osThreadId_t TaskAHandle;
@@ -63,35 +66,35 @@ const osThreadAttr_t TaskB_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
-ADC_HandleTypeDef hadc1;
-UART_HandleTypeDef huart2;
 osMutexId_t uartMutexHandle;
 const osMutexAttr_t uartMutex_attributes = {
   .name = "uartMutex"
 };
-/* adc samples filled by polling (no DMA) */
-volatile uint16_t adc_dma_buf[2];
+osMutexId_t joyMutexHandle;
+const osMutexAttr_t joyMutex_attributes = {
+  .name = "joyMutex"
+};
 typedef struct {
   uint16_t x;
   uint16_t y;
   uint8_t direction;
   uint8_t sw;
 } JoySample;
-volatile JoySample g_joy = {2048, 2048, SP_JOY_CENTER, 0};
+JoySample g_joy = {2048, 2048, SP_JOY_CENTER, 0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_USART1_UART_Init(void);
+static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_USART2_UART_Init(void);
 void StartDefaultTask(void *argument);
 void StartTask02(void *argument);
 
 /* USER CODE BEGIN PFP */
-static void MX_ADC1_Init(void);
-static void MX_USART2_UART_Init(void);
-static uint16_t ADC_ReadChannel(uint32_t channel);
+static int ADC_ReadJoystick(uint16_t samples[2]);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -136,11 +139,11 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART1_UART_Init();
-  MX_I2C1_Init();
-  /* USER CODE BEGIN 2 */
   MX_ADC1_Init();
+  MX_I2C1_Init();
+  MX_USART1_UART_Init();
   MX_USART2_UART_Init();
+  /* USER CODE BEGIN 2 */
   {
     const char boot[] = "boot\r\n";
     HAL_UART_Transmit(&huart1, (uint8_t *)boot, sizeof(boot) - 1, 100);
@@ -170,6 +173,11 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_MUTEX */
   uartMutexHandle = osMutexNew(&uartMutex_attributes);
+  joyMutexHandle = osMutexNew(&joyMutex_attributes);
+  if (uartMutexHandle == NULL || joyMutexHandle == NULL)
+  {
+    Error_Handler();
+  }
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -257,6 +265,70 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Configure the global features of the ADC (Clock, Resolution, Data
+  * Alignment and number of conversion)
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = ENABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 2;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank
+  * in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_0;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_84CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank
+  * in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = 2;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
   * @brief I2C1 Initialization Function
   * @param None
   * @retval None
@@ -324,86 +396,20 @@ static void MX_USART1_UART_Init(void)
 }
 
 /**
-  * @brief GPIO Initialization Function
+  * @brief USART2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_GPIO_Init(void)
-{
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-  {
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
-    GPIO_InitStruct.Pin = JOY_SW_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    HAL_GPIO_Init(JOY_SW_GPIO_Port, &GPIO_InitStruct);
-  }
-  /* USER CODE END MX_GPIO_Init_2 */
-}
-
-/* USER CODE BEGIN 4 */
-static void MX_ADC1_Init(void)
-{
-  ADC_ChannelConfTypeDef sConfig = {0};
-
-  hadc1.Instance = ADC1;
-  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
-  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc1.Init.ScanConvMode = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 1;
-  hadc1.Init.DMAContinuousRequests = DISABLE;
-  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  if (HAL_ADC_Init(&hadc1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  sConfig.Channel = ADC_CHANNEL_0;
-  sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_84CYCLES;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-}
-
-static uint16_t ADC_ReadChannel(uint32_t channel)
-{
-  ADC_ChannelConfTypeDef sConfig = {0};
-  sConfig.Channel = channel;
-  sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_84CYCLES;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    return 0;
-  }
-  if (HAL_ADC_Start(&hadc1) != HAL_OK)
-  {
-    return 0;
-  }
-  if (HAL_ADC_PollForConversion(&hadc1, 10) != HAL_OK)
-  {
-    return 0;
-  }
-  return (uint16_t)HAL_ADC_GetValue(&hadc1);
-}
-
 static void MX_USART2_UART_Init(void)
 {
+
+  /* USER CODE BEGIN USART2_Init 0 */
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
   huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
@@ -416,6 +422,60 @@ static void MX_USART2_UART_Init(void)
   {
     Error_Handler();
   }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin : JOY_SW_Pin */
+  GPIO_InitStruct.Pin = JOY_SW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(JOY_SW_GPIO_Port, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+static int ADC_ReadJoystick(uint16_t samples[2])
+{
+  if (HAL_ADC_Start(&hadc1) != HAL_OK)
+  {
+    return 0;
+  }
+
+  for (uint32_t i = 0; i < 2U; ++i)
+  {
+    if (HAL_ADC_PollForConversion(&hadc1, 10) != HAL_OK)
+    {
+      HAL_ADC_Stop(&hadc1);
+      return 0;
+    }
+    samples[i] = (uint16_t)HAL_ADC_GetValue(&hadc1);
+  }
+
+  HAL_ADC_Stop(&hadc1);
+  return 1;
 }
 
 #define JOY_CENTER   2048
@@ -472,21 +532,25 @@ void StartDefaultTask(void *argument)
   char line[48];
   uint16_t fx = JOY_CENTER;
   uint16_t fy = JOY_CENTER;
+  uint16_t adcSamples[2] = {JOY_CENTER, JOY_CENTER};
 
   for (;;)
   {
-    adc_dma_buf[0] = ADC_ReadChannel(ADC_CHANNEL_0);
-    adc_dma_buf[1] = ADC_ReadChannel(ADC_CHANNEL_1);
-    fx = JoyFilter(fx, adc_dma_buf[0]);
-    fy = JoyFilter(fy, adc_dma_buf[1]);
+    if (ADC_ReadJoystick(adcSamples))
+    {
+      fx = JoyFilter(fx, adcSamples[0]);
+      fy = JoyFilter(fy, adcSamples[1]);
+    }
     const unsigned sw =
         (HAL_GPIO_ReadPin(JOY_SW_GPIO_Port, JOY_SW_Pin) == GPIO_PIN_RESET) ? 1U : 0U;
     const uint8_t dir = JoyDirCode(fx, fy);
 
-    g_joy.x = fx;
-    g_joy.y = fy;
-    g_joy.direction = dir;
-    g_joy.sw = (uint8_t)sw;
+    const JoySample sample = {fx, fy, dir, (uint8_t)sw};
+    if (osMutexAcquire(joyMutexHandle, osWaitForever) == osOK)
+    {
+      g_joy = sample;
+      osMutexRelease(joyMutexHandle);
+    }
 
     snprintf(line, sizeof(line), "X=%u Y=%u %s SW=%u\r\n",
              (unsigned)fx, (unsigned)fy, JoyDirName(dir), sw);
@@ -527,10 +591,15 @@ void StartTask02(void *argument)
   uint8_t frame[SP_MAX_FRAME_SIZE];
   uint8_t rx[16];
   char line[40];
+  JoySample sample = {JOY_CENTER, JOY_CENTER, SP_JOY_CENTER, 0};
 
   for (;;)
   {
-    const JoySample sample = g_joy;
+    if (osMutexAcquire(joyMutexHandle, osWaitForever) == osOK)
+    {
+      sample = g_joy;
+      osMutexRelease(joyMutexHandle);
+    }
     const size_t len = Sp_EncodeJoystickFrame(
         sequence, sample.x, sample.y, sample.direction, sample.sw, frame,
         sizeof(frame));
