@@ -71,6 +71,8 @@ cd stm32-f407-joystick
 5. USART1 应输出 `boot`、`oled ok` 和 `TX seq=... ACK`；ESP32 B
    固件版本应不低于 `1.2.0`，其 USB 串口会输出 `JOY seq=...`。
 
+实机验收条目与串口现象见 [`docs/TEST_RECORD.md`](docs/TEST_RECORD.md)。
+
 ## CubeMX 配置与重新生成
 
 `CJY.ioc` 已包含 ADC1、I2C1、USART1、USART2、PA4 和 FreeRTOS 任务配置。
@@ -95,6 +97,7 @@ Middlewares/          FreeRTOS
 STM32CubeIDE/         CubeIDE 工程文件与链接脚本
 CJY.ioc               CubeMX 硬件及中间件配置
 regen_cubemx.txt      CubeMX 命令行生成脚本
+docs/TEST_RECORD.md   实机测试记录
 ```
 
 ## 许可证
