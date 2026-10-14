@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.20)
+project(host_fault_metrics LANGUAGES C)
+set(STM_ROOT "" CACHE PATH "STM32 project with production source and host-tests fixtures")
+if(NOT EXISTS "${STM_ROOT}/host-tests/tests.c")
+  message(FATAL_ERROR "Set STM_ROOT to the verified STM32 project")
+endif()
+add_executable(fault_metrics metrics.c "${STM_ROOT}/Core/Src/session_wire.c")
+target_include_directories(fault_metrics PRIVATE "${STM_ROOT}/host-tests"
+  "${STM_ROOT}/host-tests/mock" "${STM_ROOT}/Core/Inc")
+target_compile_features(fault_metrics PRIVATE c_std_11)
+target_compile_options(fault_metrics PRIVATE -Wall -Wextra -Werror)

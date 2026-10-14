@@ -4,6 +4,10 @@
 低通滤波与方向死区、本地 SSD1306 OLED 显示，并通过 V1 二进制协议把
 摇杆状态发送到 ESP32 B 板。
 
+## 当前运行版
+
+当前为带会话的双向 UART 与 DMA 循环接收版本；OLED 在 STM32 上同屏显示环境与摇杆状态。配套 B 是 ESP-IDF v6.1 / 应用 0.7.1。完整状态和验证范围见 [PROJECT_STATUS](docs/PROJECT_STATUS.md) 与 [故障验收](docs/FAULT_INJECTION_STATUS.md)。
+
 ## 系统流程
 
 ```text
@@ -17,10 +21,10 @@ PA0/PA1 ADC1 ──> TaskA ──滤波/死区──> OLED
 ```
 
 - `TaskA`：双通道扫描后轮询读取，更新 OLED 和最新摇杆快照
-- `TaskB`：复制快照、组帧发送，并在未收到 ACK 时最多重试 3 次
+- `TaskB`：复制快照、组帧发送，并在未收到 ACK 时最多发送 3 次（首发加 2 次重试）
 - `joyMutex`：保护 `g_joy` 的跨任务读写，避免读取到半更新数据
 - `uartMutex`：串行化两个任务对 USART1 调试口的输出
-- `sensor_protocol.c`：V1 帧编码、CRC-16/CCITT 和 ACK 校验
+- `sensor_protocol.c` / `session_wire.c` / `uart_session.c`：V1 编解码、CRC、会话握手、ACK 匹配、DMA FIFO 与恢复
 
 ## 硬件连接
 
@@ -43,7 +47,8 @@ PA0/PA1 ADC1 ──> TaskA ──滤波/死区──> OLED
 | GND | GND |
 
 协议帧格式：
-`AA 55 | Version | Type=0x04 | Sequence | Length | Payload(6) | CRC16`。
+`AA 55 | Version | Type | Sequence | Length | Payload | CRC16`。
+当前摇杆 Type=0x08，Payload 为 8 字节会话号加 6 字节摇杆字段；0x04/6 字节摇杆是历史无会话格式。
 ESP32 B 返回 ACK；配套项目见
 [esp32-ab-sensor](https://github.com/Cchenyii/esp32-ab-sensor)。
 
@@ -69,15 +74,14 @@ cd stm32-f407-joystick
 3. 将 `STM32CubeIDE/` 选为工程根目录并导入 `CJY`。
 4. 选择 `Debug` 配置，执行 `Project > Build Project`，然后烧录运行。
 5. USART1 应输出 `boot`、`oled ok` 和 `TX seq=... ACK`；ESP32 B
-   固件版本应不低于 `1.2.0`，其 USB 串口会输出 `JOY seq=...`。
+   当前使用原生 ESP-IDF 网关应用 `0.7.1`，其 USB 串口会输出 `JOY seq=...`。
 
 实机验收条目与串口现象见 [`docs/TEST_RECORD.md`](docs/TEST_RECORD.md)。
 
 ## CubeMX 配置与重新生成
 
 `CJY.ioc` 已包含 ADC1、I2C1、USART1、USART2、PA4 和 FreeRTOS 任务配置。
-在 STM32CubeIDE 中打开该文件并选择 **Generate Code**，重新生成后不会
-丢失 ADC1/USART2 引脚和初始化代码。
+在 STM32CubeIDE 中打开该文件并选择 **Generate Code**，重新生成前备份并检查 USER CODE 区、DMA1 Stream5/Channel4 循环接收、IRQ 优先级 6 及完整 diff；CubeMX 重新生成后仍需核对手工适配的 DMA 和协议入口。
 
 若使用独立 STM32CubeMX，可从仓库根目录运行：
 
