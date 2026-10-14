@@ -1,6 +1,7 @@
 name: STM32 firmware and DMA regression
 on:
   push:
+    branches: [main]
     paths: ['Core/**', 'Drivers/**', 'Middlewares/**', 'STM32CubeIDE/**', 'host-tests/**', 'firmware/**', '.github/workflows/firmware-ci.yml']
   pull_request:
     paths: ['Core/**', 'Drivers/**', 'Middlewares/**', 'STM32CubeIDE/**', 'host-tests/**', 'firmware/**', '.github/workflows/firmware-ci.yml']
