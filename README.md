@@ -104,3 +104,9 @@ docs/TEST_RECORD.md   实机测试记录
 
 本项目原创代码使用 [MIT License](LICENSE)。STMicroelectronics、ARM 和
 FreeRTOS 提供的第三方文件继续遵循各自文件头及组件许可证。
+
+## 会话、DMA 与 CI
+
+当前 Core 使用带会话的双向 UART 和 DMA 循环接收，并保留摇杆采集、滤波与 OLED 显示。
+配套 ESP32 原生 B 工程：另一个仓库的 b_esp32_idf。原 Arduino B 工程不支持这套完整会话握手。
+[CI 操作说明](docs/CI.md) 包含 23 项实际源码回归和独立 ARM GNU 固件构建；[面试讲解](docs/INTERVIEW_GUIDE.md) 包含三个调试案例。

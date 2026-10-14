@@ -42,3 +42,11 @@ Thumbs.db
 *~
 .vscode/
 .idea/
+
+/build-host/
+
+/build-firmware/
+
+/logs/
+
+/backups/

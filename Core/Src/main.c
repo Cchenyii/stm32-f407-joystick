@@ -26,6 +26,8 @@
 #include <string.h>
 #include "ssd1306.h"
 #include "sensor_protocol.h"
+#include "uart_session.h"
+#include "FreeRTOS.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,6 +52,7 @@ I2C_HandleTypeDef hi2c1;
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
+DMA_HandleTypeDef hdma_usart2_rx;
 
 /* Definitions for TaskA */
 osThreadId_t TaskAHandle;
@@ -88,6 +91,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 void StartDefaultTask(void *argument);
@@ -139,6 +143,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC1_Init();
   MX_I2C1_Init();
   MX_USART1_UART_Init();
@@ -157,9 +162,10 @@ int main(void)
   {
     const char ok[] = "oled ok\r\n";
     HAL_UART_Transmit(&huart1, (uint8_t *)ok, sizeof(ok) - 1, 100);
-    SSD1306_Clear();
-    SSD1306_SetCursor(0, 0);
-    SSD1306_WriteString("F407 JOYSTICK");
+    SSD1306_Fill(SSD1306_WHITE);
+    SSD1306_FillRect(0, 0, 128, 11, SSD1306_BLACK);
+    SSD1306_DrawText(3, 2, "ENV SENSOR", 1, SSD1306_WHITE);
+    SSD1306_DrawText(14, 27, "STM32F407 READY", 1, SSD1306_BLACK);
     SSD1306_Update();
   }
   {
@@ -269,6 +275,14 @@ void SystemClock_Config(void)
   * @param None
   * @retval None
   */
+static void MX_DMA_Init(void)
+{
+  __HAL_RCC_DMA1_CLK_ENABLE();
+  /* Same preemption priority as USART2: serialize receive cursor updates. */
+  HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 6, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
+}
+
 static void MX_ADC1_Init(void)
 {
 
@@ -517,6 +531,104 @@ static const char *JoyDirName(uint8_t code)
     default: return "CENTER";
   }
 }
+static void OledCenteredText(int16_t left, int16_t width, int16_t y, const char *text)
+{
+  const int16_t textWidth = (int16_t)SSD1306_TextWidth(text, 1);
+  SSD1306_DrawText((int16_t)(left + (width - textWidth) / 2), y, text, 1, SSD1306_BLACK);
+}
+
+static void OledSensorValue(int16_t left, const char *text)
+{
+  const int16_t width = (int16_t)SSD1306_NumberWidth(text);
+  if (width <= 60)
+    SSD1306_DrawNumber((int16_t)(left + (64 - width) / 2), 24, text, SSD1306_BLACK);
+  else
+    OledCenteredText(left, 64, 27, text);
+}
+
+static void OledJoystickIcon(uint8_t direction)
+{
+  const int16_t cx = 9;
+  const int16_t cy = 60;
+  if (direction == SP_JOY_CENTER)
+  {
+    SSD1306_FillRect(cx - 1, cy - 3, 3, 1, SSD1306_WHITE);
+    SSD1306_FillRect(cx - 1, cy + 3, 3, 1, SSD1306_WHITE);
+    SSD1306_FillRect(cx - 3, cy - 1, 1, 3, SSD1306_WHITE);
+    SSD1306_FillRect(cx + 3, cy - 1, 1, 3, SSD1306_WHITE);
+    SSD1306_DrawPixel(cx - 2, cy - 2, SSD1306_WHITE);
+    SSD1306_DrawPixel(cx + 2, cy - 2, SSD1306_WHITE);
+    SSD1306_DrawPixel(cx - 2, cy + 2, SSD1306_WHITE);
+    SSD1306_DrawPixel(cx + 2, cy + 2, SSD1306_WHITE);
+    SSD1306_DrawPixel(cx, cy, SSD1306_WHITE);
+    return;
+  }
+  const int16_t dx = direction == SP_JOY_LEFT ? -1 : direction == SP_JOY_RIGHT ? 1 : 0;
+  const int16_t dy = direction == SP_JOY_UP ? -1 : direction == SP_JOY_DOWN ? 1 : 0;
+  for (int16_t step = -3; step <= 3; ++step)
+    SSD1306_DrawPixel((int16_t)(cx + step * dx), (int16_t)(cy + step * dy), SSD1306_WHITE);
+  for (int16_t step = 1; step <= 3; ++step)
+  {
+    const int16_t tipX = (int16_t)(cx + (3 - step) * dx);
+    const int16_t tipY = (int16_t)(cy + (3 - step) * dy);
+    SSD1306_DrawPixel((int16_t)(tipX + step * dy), (int16_t)(tipY - step * dx), SSD1306_WHITE);
+    SSD1306_DrawPixel((int16_t)(tipX - step * dy), (int16_t)(tipY + step * dx), SSD1306_WHITE);
+  }
+}
+
+static void DrawSensorAndJoystick(const JoySample *joy, const SpLink_SensorSnapshot *sensor)
+{
+  char line[48];
+  const char *status = "ONLINE";
+  if (!sensor->has_session) status = "WAIT LINK";
+  else if (!sensor->link_alive) status = "LINK LOST";
+  else if (!sensor->wifi_connected) status = "WIFI OFF";
+  else if (!sensor->tcp_connected) status = "WAIT TCP";
+  else if (!sensor->valid) status = sensor->has_data ? "STALE" : "WAIT DATA";
+
+  SSD1306_Fill(SSD1306_WHITE);
+  SSD1306_FillRect(0, 0, 128, 11, SSD1306_BLACK);
+  SSD1306_DrawText(3, 2, "ENV SENSOR", 1, SSD1306_WHITE);
+  SSD1306_FillRect(66, 4, 3, 3, SSD1306_WHITE);
+  if (!sensor->valid) SSD1306_DrawPixel(67, 5, SSD1306_BLACK);
+  SSD1306_DrawText((int16_t)(124 - SSD1306_TextWidth(status, 1)), 2,
+                   status, 1, SSD1306_WHITE);
+
+  OledCenteredText(0, 64, 15, "TEMP C");
+  OledCenteredText(64, 64, 15, "HUM %");
+  SSD1306_FillRect(64, 14, 1, 23, SSD1306_BLACK);
+  SSD1306_FillRect(4, 40, 120, 1, SSD1306_BLACK);
+  SSD1306_DrawText(4, 46, "DISTANCE", 1, SSD1306_BLACK);
+  SSD1306_DrawText(114, 48, "CM", 1, SSD1306_BLACK);
+  if (sensor->valid)
+  {
+    const int32_t temperature = sensor->temperature_centi_c;
+    const uint32_t magnitude = (uint32_t)(temperature < 0 ? -temperature : temperature);
+    snprintf(line, sizeof(line), "%s%lu.%02lu", temperature < 0 ? "-" : "",
+             (unsigned long)(magnitude / 100u), (unsigned long)(magnitude % 100u));
+    OledSensorValue(0, line);
+    snprintf(line, sizeof(line), "%u.%02u", (unsigned)(sensor->humidity_centi_percent / 100u),
+             (unsigned)(sensor->humidity_centi_percent % 100u));
+    OledSensorValue(64, line);
+    snprintf(line, sizeof(line), "%u", (unsigned)sensor->distance_cm);
+  }
+  else
+  {
+    OledSensorValue(0, "--");
+    OledSensorValue(64, "--");
+    snprintf(line, sizeof(line), "--");
+  }
+  SSD1306_DrawNumber((int16_t)(110 - SSD1306_NumberWidth(line)), 43, line, SSD1306_BLACK);
+
+  SSD1306_FillRect(0, 56, 128, 8, SSD1306_BLACK);
+  OledJoystickIcon(joy->direction);
+  snprintf(line, sizeof(line), "X%u Y%u", (unsigned)joy->x, (unsigned)joy->y);
+  SSD1306_DrawText(20, 57, line, 1, SSD1306_WHITE);
+  if (joy->sw) SSD1306_FillRect(99, 56, 29, 8, SSD1306_WHITE);
+  snprintf(line, sizeof(line), "SW:%u", (unsigned)joy->sw);
+  SSD1306_DrawText(102, 57, line, 1, joy->sw ? SSD1306_BLACK : SSD1306_WHITE);
+  SSD1306_Update();
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -556,21 +668,9 @@ void StartDefaultTask(void *argument)
              (unsigned)fx, (unsigned)fy, JoyDirName(dir), sw);
     UartPrint(line);
 
-    SSD1306_Clear();
-    SSD1306_SetCursor(0, 0);
-    SSD1306_WriteString("F407 JOYSTICK");
-    snprintf(line, sizeof(line), "X=%u", (unsigned)fx);
-    SSD1306_SetCursor(0, 2);
-    SSD1306_WriteString(line);
-    snprintf(line, sizeof(line), "Y=%u", (unsigned)fy);
-    SSD1306_SetCursor(0, 3);
-    SSD1306_WriteString(line);
-    SSD1306_SetCursor(0, 5);
-    SSD1306_WriteString(JoyDirName(dir));
-    snprintf(line, sizeof(line), "SW=%u", sw);
-    SSD1306_SetCursor(0, 6);
-    SSD1306_WriteString(line);
-    SSD1306_Update();
+    SpLink_SensorSnapshot sensor;
+    SpLink_GetSensorSnapshot(&sensor);
+    DrawSensorAndJoystick(&sample, &sensor);
 
     osDelay(200);
   }
@@ -587,12 +687,14 @@ void StartDefaultTask(void *argument)
 void StartTask02(void *argument)
 {
   /* USER CODE BEGIN StartTask02 */
-  uint32_t sequence = 1;
-  uint8_t frame[SP_MAX_FRAME_SIZE];
-  uint8_t rx[16];
-  char line[40];
+  char line[96];
+  if (!SpLink_Init(&huart2))
+  {
+    UartPrint("UART session init/self-test FAILED\r\n");
+    for (;;) osDelay(1000);
+  }
   JoySample sample = {JOY_CENTER, JOY_CENTER, SP_JOY_CENTER, 0};
-
+  UartPrint("USART2 DMA circular RX + IDLE; receive self-test PASS (8/8)\r\n");
   for (;;)
   {
     if (osMutexAcquire(joyMutexHandle, osWaitForever) == osOK)
@@ -600,39 +702,21 @@ void StartTask02(void *argument)
       sample = g_joy;
       osMutexRelease(joyMutexHandle);
     }
-    const size_t len = Sp_EncodeJoystickFrame(
-        sequence, sample.x, sample.y, sample.direction, sample.sw, frame,
-        sizeof(frame));
-    int acked = 0;
-    if (len > 0)
-    {
-      for (int attempt = 0; attempt < 3 && !acked; ++attempt)
-      {
-        HAL_UART_Transmit(&huart2, frame, (uint16_t)len, 50);
-        /* drain / wait ACK ~80ms */
-        uint32_t got = 0;
-        const uint32_t t0 = HAL_GetTick();
-        while ((HAL_GetTick() - t0) < 80u && got < sizeof(rx))
-        {
-          uint8_t b;
-          if (HAL_UART_Receive(&huart2, &b, 1, 5) == HAL_OK)
-          {
-            rx[got++] = b;
-            if (got >= 13u && Sp_IsAckOk(rx, got, sequence))
-            {
-              acked = 1;
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    snprintf(line, sizeof(line), "TX seq=%lu %s\r\n",
-             (unsigned long)sequence, acked ? "ACK" : "NOACK");
+    const int acked = SpLink_SendJoystick(sample.x, sample.y,
+                                          sample.direction, sample.sw);
+    const uint64_t current_session = SpLink_GetSession();
+    snprintf(line, sizeof(line), "TX session=%08lx%08lx seq=%lu %s\r\n",
+             (unsigned long)(current_session >> 32), (unsigned long)current_session,
+             (unsigned long)SpLink_GetLastSequence(), acked ? "ACK" : "NOACK");
     UartPrint(line);
-    sequence++;
-    osDelay(200);
+    g_spLinkRxStats.task_a_stack_free_bytes = osThreadGetStackSpace(TaskAHandle);
+    g_spLinkRxStats.free_heap_bytes = xPortGetFreeHeapSize();
+    g_spLinkRxStats.minimum_free_heap_bytes = xPortGetMinimumEverFreeHeapSize();
+    for (unsigned idle = 0; idle < 20; ++idle)
+    {
+      SpLink_Poll();
+      osDelay(10);
+    }
   }
   /* USER CODE END StartTask02 */
 }

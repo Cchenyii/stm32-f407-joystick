@@ -1,0 +1,56 @@
+name: STM32 firmware and DMA regression
+on:
+  push:
+    paths: ['Core/**', 'Drivers/**', 'Middlewares/**', 'STM32CubeIDE/**', 'host-tests/**', 'firmware/**', '.github/workflows/firmware-ci.yml']
+  pull_request:
+    paths: ['Core/**', 'Drivers/**', 'Middlewares/**', 'STM32CubeIDE/**', 'host-tests/**', 'firmware/**', '.github/workflows/firmware-ci.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: stm32-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  host-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Configure actual STM32 UART source with host HAL fixtures
+        env:
+          CC: ${{ matrix.compiler }}
+        run: cmake -S host-tests -B build-host -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON
+      - name: Build with strict compiler warnings
+        run: cmake --build build-host --parallel 2
+      - name: Run DMA, ACK, session and sensor regression
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build-host --output-on-failure --output-junit results.xml
+      - name: Preserve test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stm32-host-${{ matrix.compiler }}
+          path: build-host/results.xml
+          if-no-files-found: warn
+          retention-days: 14
+  stm32-firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install ARM GNU toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi
+      - name: Configure Cortex-M4 firmware
+        run: cmake -S firmware -B build-firmware -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/arm-none-eabi.cmake" -DCMAKE_BUILD_TYPE=Debug
+      - name: Compile and link STM32F407 firmware
+        run: cmake --build build-firmware --parallel 2

@@ -72,6 +72,107 @@ static const uint8_t Font5x7[][5] = {
   {0x61,0x51,0x49,0x45,0x43}, /* Z */
 };
 
+/* Original 8x12 digits, one byte per row with the left pixel in bit 7. */
+static const uint8_t Number8x12[10][12] = {
+  {0x3C,0x7E,0xC3,0xC3,0xC3,0xC3,0xC3,0xC3,0xC3,0xC3,0x7E,0x3C},
+  {0x18,0x38,0x78,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x7E,0x7E},
+  {0x3C,0x7E,0xC3,0x03,0x06,0x0C,0x18,0x30,0x60,0xC0,0xFF,0xFF},
+  {0x3C,0x7E,0xC3,0x03,0x03,0x1E,0x1E,0x03,0x03,0xC3,0x7E,0x3C},
+  {0x06,0x0E,0x1E,0x36,0x66,0xC6,0xC6,0xFF,0xFF,0x06,0x06,0x06},
+  {0xFF,0xFF,0xC0,0xC0,0xFC,0xFE,0x03,0x03,0x03,0xC3,0x7E,0x3C},
+  {0x1E,0x3E,0x60,0xC0,0xC0,0xFC,0xFE,0xC3,0xC3,0xC3,0x7E,0x3C},
+  {0xFF,0xFF,0x03,0x06,0x0C,0x18,0x18,0x30,0x30,0x60,0x60,0x60},
+  {0x3C,0x7E,0xC3,0xC3,0xC3,0x7E,0x7E,0xC3,0xC3,0xC3,0x7E,0x3C},
+  {0x3C,0x7E,0xC3,0xC3,0xC3,0x7F,0x3F,0x03,0x03,0x06,0x7C,0x78}
+};
+
+void SSD1306_Fill(uint8_t lit)
+{
+  memset(s_buf, lit ? 0xFF : 0x00, sizeof(s_buf));
+  s_x = 0;
+  s_page = 0;
+}
+
+void SSD1306_DrawPixel(int16_t x, int16_t y, uint8_t lit)
+{
+  if (x < 0 || x >= SSD1306_WIDTH || y < 0 || y >= SSD1306_HEIGHT) return;
+  const uint16_t index = (uint16_t)((y / 8) * SSD1306_WIDTH + x);
+  const uint8_t mask = (uint8_t)(1U << (y & 7));
+  if (lit) s_buf[index] |= mask;
+  else s_buf[index] &= (uint8_t)~mask;
+}
+
+void SSD1306_FillRect(int16_t x, int16_t y, int16_t width, int16_t height, uint8_t lit)
+{
+  if (width <= 0 || height <= 0) return;
+  int32_t right = (int32_t)x + width;
+  int32_t bottom = (int32_t)y + height;
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  if (right > SSD1306_WIDTH) right = SSD1306_WIDTH;
+  if (bottom > SSD1306_HEIGHT) bottom = SSD1306_HEIGHT;
+  for (int16_t py = y; py < bottom; ++py)
+    for (int16_t px = x; px < right; ++px)
+      SSD1306_DrawPixel(px, py, lit);
+}
+
+uint16_t SSD1306_TextWidth(const char *s, uint8_t scale)
+{
+  if (s == NULL || scale == 0 || scale > 3) return 0;
+  uint16_t count = 0;
+  while (*s++ && count < SSD1306_WIDTH) ++count;
+  return count ? (uint16_t)((count * 6U - 1U) * scale) : 0;
+}
+
+void SSD1306_DrawText(int16_t x, int16_t y, const char *s, uint8_t scale, uint8_t lit)
+{
+  if (s == NULL || scale == 0 || scale > 3) return;
+  while (*s && x < SSD1306_WIDTH)
+  {
+    char c = *s++;
+    if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+    if (c < 32 || c > 90) c = '?';
+    const uint8_t *glyph = Font5x7[c - 32];
+    for (uint8_t col = 0; col < 5; ++col)
+      for (uint8_t row = 0; row < 7; ++row)
+        if (glyph[col] & (1U << row))
+          SSD1306_FillRect((int16_t)(x + col * scale), (int16_t)(y + row * scale),
+                           scale, scale, lit);
+    x = (int16_t)(x + 6U * scale);
+  }
+}
+
+uint16_t SSD1306_NumberWidth(const char *s)
+{
+  if (s == NULL) return 0;
+  uint16_t width = 0;
+  while (*s && width < 1024U)
+  {
+    width += *s++ == '.' ? 4U : 10U;
+  }
+  return width ? (uint16_t)(width - 2U) : 0;
+}
+
+void SSD1306_DrawNumber(int16_t x, int16_t y, const char *s, uint8_t lit)
+{
+  if (s == NULL) return;
+  while (*s && x < SSD1306_WIDTH)
+  {
+    const char c = *s++;
+    if (c >= '0' && c <= '9')
+    {
+      const uint8_t *glyph = Number8x12[c - '0'];
+      for (uint8_t row = 0; row < 12; ++row)
+        for (uint8_t col = 0; col < 8; ++col)
+          if (glyph[row] & (0x80U >> col))
+            SSD1306_DrawPixel((int16_t)(x + col), (int16_t)(y + row), lit);
+    }
+    else if (c == '-') SSD1306_FillRect(x, (int16_t)(y + 5), 8, 2, lit);
+    else if (c == '.') SSD1306_FillRect(x, (int16_t)(y + 10), 2, 2, lit);
+    x = (int16_t)(x + (c == '.' ? 4 : 10));
+  }
+}
+
 static HAL_StatusTypeDef WriteCmd(uint8_t cmd)
 {
   uint8_t data[2] = {0x00, cmd};
@@ -129,9 +230,7 @@ HAL_StatusTypeDef SSD1306_Init(I2C_HandleTypeDef *hi2c)
 
 void SSD1306_Clear(void)
 {
-  memset(s_buf, 0, sizeof(s_buf));
-  s_x = 0;
-  s_page = 0;
+  SSD1306_Fill(SSD1306_BLACK);
 }
 
 void SSD1306_SetCursor(uint8_t x, uint8_t page)
