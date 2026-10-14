@@ -50,3 +50,7 @@ Thumbs.db
 /logs/
 
 /backups/
+
+build-a/
+
+build-fault-metrics/
